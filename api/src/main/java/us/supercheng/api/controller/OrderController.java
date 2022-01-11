@@ -2,6 +2,7 @@ package us.supercheng.api.controller;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import us.supercheng.bo.SubmitOrderBO;
@@ -14,6 +15,8 @@ import us.supercheng.vo.OrderVO;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("orders")
@@ -21,6 +24,27 @@ public class OrderController extends BaseController {
 
     @Autowired
     private OrderService orderService;
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    @PostMapping("getCreateOrderToken")
+    public APIResponse getCreateOrderToken(String userId) {
+        if (StringUtils.isBlank(userId))
+            return APIResponse.errorMsg("Missing User ID");
+        String token = UUID.randomUUID() + userId;
+
+        try {
+            this.redisTemplate.opsForValue().set(token, token);
+            if (this.redisTemplate.expire(token, 2, TimeUnit.MINUTES)) {
+                return APIResponse.ok(token);
+            } else {
+                return APIResponse.errorMsg("Could not generate create order token Please try later");
+            }
+        } catch (Exception ex) {
+            return APIResponse.errorMsg(ex.getMessage());
+        }
+    }
 
     @PostMapping("create")
     public APIResponse createOrder(@RequestBody SubmitOrderBO submitOrderBO, HttpServletRequest req, HttpServletResponse resp) {
@@ -44,6 +68,15 @@ public class OrderController extends BaseController {
                 return APIResponse.errorMsg("Unsupported Payment Type: " + payType);
         // Create Order
         OrderVO orderVO = this.orderService.createOrder(submitOrderBO, PAYMENT_CENTER, req, resp);
+        if (orderVO == null)
+            return APIResponse.errorMsg("Create Order Issue please try again later");
+
+        try {
+            this.redisTemplate.delete(submitOrderBO.getToken());
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+
         return APIResponse.ok(orderVO.getOrders().getId());
     }
 

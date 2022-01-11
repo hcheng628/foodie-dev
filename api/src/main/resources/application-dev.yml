@@ -13,18 +13,20 @@ server:
 ############################################################
 spring:
   datasource:                                         # 数据源的相关配置
-    url: jdbc:mysql://192.168.31.46:3306/foodie_dev?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true
+    url: jdbc:mysql://192.168.31.25:3306/foodie-shop-dev?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true
+    # schema used to be called foodie_dev
     username: root
-    password: abc123456
+    password: root
   redis:
     password: moka_cheng
     # Standalone
     database: 0
-    host: 192.168.31.46
+    host: redis-18787.c289.us-west-1-2.ec2.cloud.redislabs.com
 
     # Cluster
     # cluster:
     #  nodes: 192.168.31.152:6379,192.168.31.159:6379,192.168.31.184:6379,192.168.31.199:6379,192.168.31.206:6379,192.168.31.213:6379
+    port: 18787
 
 mybatis:
   configuration:

@@ -2,6 +2,8 @@ package us.supercheng.service.impl;
 
 import org.apache.commons.lang3.StringUtils;
 import org.n3r.idworker.Sid;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -29,6 +31,7 @@ import us.supercheng.vo.OrderVO;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class OrderServiceImpl implements OrderService {
@@ -58,13 +61,16 @@ public class OrderServiceImpl implements OrderService {
     private RedisOperator redisOperator;
 
     @Autowired
+    private RedissonClient redisson;
+
+    @Autowired
     private RestTemplate restTemplate;
 
     @Transactional
     @Override
     public OrderVO createOrder(SubmitOrderBO submitOrderBO, String url, HttpServletRequest req, HttpServletResponse resp) {
         int totalAmt = 0,
-            actualAmt = 0,
+            actualAmt = 1,
             postAmt = 0;
 
         Orders order = new Orders();
@@ -79,6 +85,18 @@ public class OrderServiceImpl implements OrderService {
         if (StringUtils.isBlank(jsonStr)) {
             CookieUtils.deleteCookie(req, resp, CookieUtils.SHOPCART_COOKIE_KEY);
             throw new RuntimeException("Cannot create order due to redis shopping cart is missing");
+        }
+
+        if (StringUtils.isBlank(submitOrderBO.getToken())) {
+            throw new RuntimeException("Cannot create order due to create order token is missing");
+        }
+
+        try {
+            RLock lock = this.redisson.getLock("LOCK_ORDER_" + submitOrderBO.getToken());
+            if (!lock.tryLock(0, 3, TimeUnit.SECONDS))
+                return null;
+        } catch (Exception ex) {
+            throw new RuntimeException("Cannot create order due to lock token exception: " + ex.getMessage());
         }
 
         List<ShopcartItemBO> itemBOS = JsonUtils.jsonToList(jsonStr, ShopcartItemBO.class);
@@ -123,6 +141,20 @@ public class OrderServiceImpl implements OrderService {
         OrderStatus orderStatus = new OrderStatus();
         List<ShopcartItemBO> delList = new ArrayList<>();
 
+        // money
+        order.setTotalAmount(0);
+        order.setRealPayAmount(actualAmt);
+        // order.setRealPayAmount(0);
+        order.setPostAmount(postAmt);
+
+        order.setIsComment(YesOrNo.No.type);
+        order.setIsDelete(YesOrNo.No.type);
+
+        order.setCreatedTime(now);
+        order.setUpdatedTime(now);
+
+        this.ordersMapper.insert(order);
+
         for (String specId : specIds) {
             OrderItems orderItems = new OrderItems();
 
@@ -161,18 +193,9 @@ public class OrderServiceImpl implements OrderService {
 
         this.orderStatusMapper.insert(orderStatus);
 
-        // money
         order.setTotalAmount(totalAmt);
-        //order.setRealPayAmount(actualAmt);
-        order.setRealPayAmount(1);
-        order.setPostAmount(postAmt);
-
-        order.setIsComment(YesOrNo.No.type);
-        order.setIsDelete(YesOrNo.No.type);
-
-        order.setCreatedTime(now);
-        order.setUpdatedTime(now);
-        this.ordersMapper.insert(order);
+        order.setUserId(null);
+        this.ordersMapper.updateByPrimaryKeySelective(order);
 
         MerchantOrdersVO merchantOrdersVO = new MerchantOrdersVO();
         merchantOrdersVO.setAmount(order.getRealPayAmount());
@@ -191,13 +214,13 @@ public class OrderServiceImpl implements OrderService {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.add("imoocUserId", "imooc");
         headers.add("password", "imooc");
-
+        System.out.println(ret.getMerchantOrdersVO());
         HttpEntity<MerchantOrdersVO> entity = new HttpEntity<>(ret.getMerchantOrdersVO(), headers);
         ResponseEntity<APIResponse> respEntity = restTemplate.postForEntity(url, entity, APIResponse.class);
 
         APIResponse apiResp = respEntity.getBody();
         if (apiResp == null || apiResp.getStatus() != 200)
-            throw new RuntimeException("Interval Payment error...... from " + url);
+            throw new RuntimeException("Interval Payment error...... from " + url + "\n" +apiResp.getMsg());
 
         jsonStr = JsonUtils.objectToJson(itemBOS);
         this.redisOperator.set(redisKey, jsonStr);
